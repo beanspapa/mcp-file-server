@@ -1,0 +1,22 @@
+{
+  "name": "today-weather",
+  "description": "오늘 특정 도시의 날씨를 물어봅니다.",
+  "arguments": [
+    {
+      "name": "city",
+      "description": "날씨를 알고 싶은 도시 이름",
+      "required": true
+    }
+  ],
+  "messageTemplates": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "오늘 {{city}}의 날씨는 어때?"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "name": "@beanspapa/mcp-file-server",
+  "version": "1.0.0",
+  "description": "File system server implementing the Model Context Protocol",
+  "main": "dist/server.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "node --loader ts-node/esm src/server.ts",
+    "cli": "node --loader ts-node/esm src/cli-test.ts"
+  },
+  "keywords": [
+    "mcp",
+    "file-server",
+    "typescript",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beanspapa/mcp-file-server.git"
+  },
+  "author": "beanspapa (junho.bak@gmail.com)",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.0.3",
+    "mcp-file-server": "file:"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.0.0"
+  },
+  "directories": {
+    "doc": "docs"
+  }
+}
