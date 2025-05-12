@@ -12,9 +12,11 @@ import {
   GetPromptRequestSchema,
   ListPromptsResult,
   GetPromptResult,
+  ListResourcesRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { fileURLToPath } from "url";
 import { z } from "zod";
+import path from "path";
 
 // 새로운 구현체 import
 import { FileResourceManager } from "./implementations/fileResourceManager.js";
@@ -25,10 +27,11 @@ import { FileConfig } from "./types/index.js";
 
 export class MCPServer {
   private server: Server;
-  private resourceManager?: FileResourceManager;
-  private promptManager?: FilePromptManager;
-  private toolManager?: FileToolManager;
-  private fileService?: FileService;
+  private fileService!: FileService;
+  private resourceManager!: FileResourceManager;
+  private promptManager!: FilePromptManager;
+  private toolManager!: FileToolManager;
+  private config!: FileConfig;
 
   constructor() {
     this.server = new Server(
@@ -47,8 +50,29 @@ export class MCPServer {
 
     // Only setup handlers that DON'T depend on managers here
     this.setupServerHandlers();
-    this.setupConfigHandlers();
     this.setupErrorHandling(); // Error handling can also be set up early
+  }
+
+  async initialize(config: FileConfig): Promise<void> {
+    this.config = config;
+
+    this.fileService = new FileService(this.config);
+
+    this.resourceManager = new FileResourceManager(this.fileService);
+    this.toolManager = new FileToolManager(this.fileService);
+    this.promptManager = new FilePromptManager(this.fileService);
+
+    await Promise.all([
+      this.resourceManager.initialize(),
+      this.toolManager.initialize(),
+      this.promptManager.initialize(),
+    ]);
+
+    this.setupToolHandlers();
+    this.setupResourceHandlers();
+    this.setupPromptHandlers();
+
+    console.log("MCP File Server initialized with config:", this.config);
   }
 
   private setupErrorHandling(): void {
@@ -60,57 +84,6 @@ export class MCPServer {
       await this.server.close();
       process.exit(0);
     });
-  }
-
-  private setupConfigHandlers(): void {
-    const SetConfigRequestSchema = z.object({
-      method: z.literal("server/config"),
-      params: z.object({
-        config: z.object({
-          allowedDirectories: z.array(z.string()),
-          allowedExtensions: z.array(z.string()),
-        }),
-      }),
-    });
-
-    this.server.setRequestHandler(
-      SetConfigRequestSchema,
-      async (request: { params: { config: FileConfig } }) => {
-        try {
-          const config: FileConfig = request.params.config;
-
-          // FileService initialization
-          this.fileService = new FileService(config);
-
-          // Manager initialization
-          this.resourceManager = new FileResourceManager(this.fileService);
-          this.toolManager = new FileToolManager(this.fileService);
-          this.promptManager = new FilePromptManager(this.fileService);
-
-          // Manager initialization execution
-          await Promise.all([
-            this.resourceManager.initialize(),
-            this.toolManager.initialize(),
-            this.promptManager.initialize(),
-          ]);
-
-          // *** Setup manager-dependent handlers AFTER managers are initialized ***
-          this.setupToolHandlers();
-          this.setupResourceHandlers();
-          this.setupPromptHandlers();
-          // ********************************************************************
-
-          return { success: true };
-        } catch (error) {
-          throw new McpError(
-            ErrorCode.InternalError,
-            `Failed to set configuration: ${
-              error instanceof Error ? error.message : "Unknown error"
-            }`
-          );
-        }
-      }
-    );
   }
 
   private setupServerHandlers(): void {
@@ -128,18 +101,12 @@ export class MCPServer {
 
   private setupToolHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      if (!this.toolManager) {
-        throw new McpError(ErrorCode.InternalError, "Server not configured");
-      }
       return await this.toolManager.listTools();
     });
 
     this.server.setRequestHandler(
       CallToolRequestSchema,
       async (request, extra) => {
-        if (!this.toolManager) {
-          throw new McpError(ErrorCode.InternalError, "Server not configured");
-        }
         try {
           const result = await this.toolManager.executeTool(
             request.params.name,
@@ -160,14 +127,7 @@ export class MCPServer {
   }
 
   private setupResourceHandlers(): void {
-    const ListResourcesRequestSchema = z.object({
-      method: z.literal("resources/list"),
-    });
-
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      if (!this.resourceManager) {
-        throw new McpError(ErrorCode.InternalError, "Server not configured");
-      }
       try {
         const { resources } = await this.resourceManager.listResources();
         return {
@@ -183,19 +143,9 @@ export class MCPServer {
   }
 
   private setupPromptHandlers(): void {
-    // Handler for prompts/list
     this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
-      if (!this.promptManager) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          "Prompt manager not initialized"
-        );
-      }
       try {
-        // Validate parameters implicitly via setRequestHandler schema matching
-        // Access params via request.params
         const params = request.params || {};
-        // Call listPrompts with only the cursor, if it exists
         return await this.promptManager.listPrompts(params.cursor);
       } catch (error: any) {
         console.error("Error listing prompts:", error);
@@ -215,20 +165,10 @@ export class MCPServer {
       }
     });
 
-    // Handler for prompts/get
     this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-      if (!this.promptManager) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          "Prompt manager not initialized"
-        );
-      }
       try {
-        // Validate parameters implicitly via setRequestHandler schema matching
-        // Access params via request.params
         const params = request.params;
         if (!params?.name) {
-          // Explicit check for safety, though schema should enforce
           throw new McpError(
             ErrorCode.InvalidParams,
             "Missing required parameter: name"
@@ -270,9 +210,63 @@ export class MCPServer {
   }
 }
 
-// 서버 실행
-const currentFilePath = fileURLToPath(import.meta.url);
-if (currentFilePath === process.argv[1]) {
-  const server = new MCPServer();
-  server.run().catch(console.error);
+function parseArgs(args: string[]): FileConfig {
+  const extensionFlag = "--extensions";
+  const extensionIndex = args.indexOf(extensionFlag);
+
+  if (extensionIndex === -1) {
+    throw new Error(
+      `Missing required argument flag: ${extensionFlag}. Usage: node <script> <dir1> <dir2> ... ${extensionFlag} <ext1>,<ext2>,...`
+    );
+  }
+
+  const allowedDirectories = args
+    .slice(0, extensionIndex)
+    .map((dir) => path.resolve(dir));
+
+  if (allowedDirectories.length === 0) {
+    console.warn("Warning: No allowed directories specified.");
+  }
+
+  const extensionsArg = args[extensionIndex + 1];
+  if (!extensionsArg) {
+    throw new Error(
+      `Missing extension list after ${extensionFlag}. Usage: ... ${extensionFlag} <ext1>,<ext2>,...`
+    );
+  }
+
+  const allowedExtensions = extensionsArg
+    .split(",")
+    .map((ext) => ext.trim())
+    .filter((ext) => ext.startsWith("."));
+
+  if (allowedExtensions.length === 0) {
+    console.warn(
+      `Warning: No valid extensions provided after ${extensionFlag}. Allowing all extensions implicitly is generally unsafe.`
+    );
+  }
+
+  return {
+    allowedDirectories,
+    allowedExtensions,
+  };
+}
+
+if (
+  require.main === module ||
+  fileURLToPath(import.meta.url) === process.argv[1]
+) {
+  (async () => {
+    try {
+      const args = process.argv.slice(2);
+      const config = parseArgs(args);
+
+      const server = new MCPServer();
+      await server.initialize(config);
+      await server.run();
+    } catch (error) {
+      console.error("Failed to start MCP File Server:", error);
+      process.exit(1);
+    }
+  })();
 }

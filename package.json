@@ -1,6 +1,6 @@
 {
   "name": "@beanspapa/mcp-file-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "File system server implementing the Model Context Protocol",
   "main": "dist/server.js",
   "type": "module",

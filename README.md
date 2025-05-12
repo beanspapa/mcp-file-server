@@ -26,7 +26,7 @@ MCP 파일 서버는 Model Context Protocol(MCP) 표준을 기반으로, 파일 
 
 **중요: 초기화 순서**
 
-1.  서버는 시작 후 클라이언트로부터 **`server/config`** 요청을 통해 `allowedDirectories`, `allowedExtensions` 등의 설정을 받아야 합니다.
+1.  서버는 시작 시 **명령줄 인수**를 통해 `allowedDirectories`, `allowedExtensions` 등의 설정을 전달받습니다. (자세한 형식은 아래 "설정" 섹션 참조)
 2.  이 설정값을 기반으로 `FileService` 및 각 `Manager` (Tool, Resource, Prompt)가 **초기화**됩니다.
 3.  Manager들이 성공적으로 초기화된 **후에** 관련 MCP 요청 핸들러(예: `tools/list`, `resources/list`, 개별 도구 핸들러 등)가 등록됩니다.
 
@@ -42,11 +42,18 @@ npm install
 
 ```bash
 # 개발 모드로 실행 (변경사항 자동 감지)
-npm run dev
+npm run dev -- <허용디렉토리1> <허용디렉토리2> ... --extensions <확장자1>,<확장자2>,...
+
+# 예시: 현재 디렉토리의 data와 /tmp/shared를 허용하고, .txt와 .json 확장자만 허용
+npm run dev -- ./data /tmp/shared --extensions .txt,.json
+
+# 빌드 후 실행
+npm run build
+node dist/server.js ./data /tmp/shared --extensions .txt,.json
 ```
 
 - 서버는 MCP 프로토콜을 통해 클라이언트와 통신합니다.
-- **주의**: 서버가 정상적으로 동작하려면, 클라이언트는 서버 연결 후 가장 먼저 `server/config` 요청을 보내 `allowedDirectories`와 `allowedExtensions`를 설정해야 합니다. 이 설정 없이는 `FileService`가 초기화되지 않아 대부분의 기능이 작동하지 않습니다.
+- **주의**: 서버가 정상적으로 동작하려면, 서버를 시작할 때 반드시 유효한 `allowedDirectories`와 `allowedExtensions`를 명령줄 인수로 전달해야 합니다. 이 설정 없이는 `FileService`가 초기화되지 않아 대부분의 기능이 작동하지 않습니다.
 
 ### CLI 테스트 도구
 
@@ -73,59 +80,82 @@ npm run cli createDir C:\\Users\\User\\Desktop\\mcp-test\\new_folder
 
 ## MCP 클라이언트 상호작용 예시 (개념)
 
-실제 MCP 클라이언트는 다음과 같은 요청을 서버에 보낼 수 있습니다:
+실제 MCP 클라이언트는 서버를 시작할 때 필요한 설정(`allowedDirectories`, `allowedExtensions`)을 **명령줄 인수로 전달**해야 합니다. 클라이언트 구현에 따라 다르지만, 일반적으로 클라이언트 설정 파일에서 서버 실행 시 전달할 인수를 지정합니다.
+
+**클라이언트 설정 파일 예시 (가상):**
 
 ```json
-// 서버 설정 요청
 {
-  "jsonrpc": "2.0",
-  "method": "server/config",
-  "params": {
-    "allowedDirectories": ["/path/to/workspace"],
-    "allowedExtensions": [".txt", ".md"]
+  "mcpServers": {
+    "my-file-server": {
+      "command": "node", // 또는 "npx @beanspapa/mcp-file-server" 등
+      "args": [
+        "dist/server.js", // 실행할 스크립트 또는 패키지
+        // --- 허용할 디렉토리 경로 목록 ---
+        "/path/to/safe-workspace",
+        "/another/safe/path",
+        // --- 확장자 플래그 및 목록 ---
+        "--extensions",
+        ".txt,.md,.json"
+        // ---------------------------
+      ]
+      // "cwd" 필드 등이 필요할 수 있음
+    }
+    // ... 다른 서버 설정 ...
   }
 }
+```
 
+서버가 위 설정으로 시작된 후, 클라이언트는 다음과 같은 MCP 요청을 보낼 수 있습니다:
+
+```json
 // 도구 목록 요청
 { "jsonrpc": "2.0", "method": "tools/list", "params": {} }
 
 // 파일 읽기 도구 실행 요청
 {
   "jsonrpc": "2.0",
-  "method": "file-reader", // ToolManager에 등록된 도구 이름
+  "method": "readFile", // FileToolManager에 등록된 도구 이름
   "params": {
-    "path": "documents/report.txt" // allowedDirectories 기준 상대 경로
+    "path": "documents/report.txt" // allowedDirectories 중 하나에 속하는 경로
   }
 }
 ```
 
-## 설정 (`server/config` 파라미터)
+## 설정 (명령줄 인수)
 
-클라이언트가 `server/config` 요청 시 `params`에 포함해야 하는 설정입니다.
+서버를 시작할 때 다음 형식으로 명령줄 인수를 전달하여 `allowedDirectories`와 `allowedExtensions`를 설정합니다.
 
-```json
-{
-  "allowedDirectories": ["/home/user/projects/safe-zone", "/var/data/shared"],
-  "allowedExtensions": [
-    ".txt",
-    ".json",
-    ".md",
-    ".csv"
-    // 필요한 확장자 명시 (점(.) 포함)
-  ]
-}
+**형식:**
+
+```
+node <스크립트경로> <허용디렉토리1> <허용디렉토리2> ... --extensions <확장자1>,<확장자2>,...
 ```
 
-- `allowedDirectories`: 서버가 파일 작업을 수행할 수 있는 최상위 디렉토리 목록입니다. **반드시 절대 경로**로 지정해야 합니다.
-- `allowedExtensions`: 접근을 허용할 파일 확장자 목록입니다. **반드시 점(.)으로 시작**해야 합니다. (예: `.txt`)
+- `<스크립트경로>`: 컴파일된 서버 파일 경로 (예: `dist/server.js`).
+- `<허용디렉토리...>`: 서버가 접근할 수 있는 **절대 경로 또는 상대 경로** 목록입니다. 여러 개를 공백으로 구분하여 전달합니다. 경로는 서버 내부에서 절대 경로로 변환되어 처리됩니다.
+- `--extensions`: 허용 디렉토리 목록과 확장자 목록을 구분하는 플래그입니다. **반드시 포함되어야 합니다.**
+- `<확장자1>,<확장자2>,...`: 접근을 허용할 파일 확장자 목록입니다. **콤마(,)로 구분하고, 반드시 점(.)으로 시작**해야 합니다. (예: `.txt,.json,.md`). 확장자 목록 앞뒤나 콤마 주변에 공백이 있으면 제거됩니다.
+
+**실행 예시:**
+
+```bash
+# 현재 디렉토리의 data 폴더와 /tmp/shared 폴더를 허용하고, .txt와 .json 확장자만 허용
+node dist/server.js ./data /tmp/shared --extensions .txt,.json
+
+# Windows 예시: C 드라이브의 work 폴더와 D 드라이브의 projects 폴더를 허용하고 .md 확장자만 허용
+node dist/server.js C:\\work D:\\projects --extensions .md
+```
+
+- **주의:** `--extensions` 플래그 뒤에 확장자를 지정하지 않거나 유효한 확장자(점으로 시작)가 없으면 경고가 출력되며, `FileService`가 모든 파일 작업을 차단할 수 있습니다. 명시적으로 허용할 확장자를 지정하는 것이 안전합니다.
 
 ## 타입 정의 (주요 타입)
 
-- **`FileOperationParams` (예: `file-reader` 도구 입력)**: `path: string` 등 도구별 파라미터.
-- **`FileServiceConfig`**: `{ allowedDirectories: string[]; allowedExtensions: string[]; }`
+- **`FileOperationParams` (예: `readFile` 도구 입력)**: `path: string` 등 도구별 파라미터.
+- **`FileConfig`**: `{ allowedDirectories: string[]; allowedExtensions: string[]; }` (명령줄 인수로 전달됨)
 - **`McpError`**: MCP 표준 오류 객체 (`code`, `message`, `data?`).
 
-(자세한 MCP 요청/응답 타입은 `@mcp/sdk` 등 관련 SDK 문서를 참조하세요.)
+(자세한 MCP 요청/응답 타입은 `@modelcontextprotocol/sdk` 등 관련 SDK 문서를 참조하세요.)
 
 ## 폴더 구조
 
